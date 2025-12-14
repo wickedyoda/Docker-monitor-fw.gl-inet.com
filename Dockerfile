@@ -9,4 +9,4 @@ RUN chmod +x /app/monitor.sh /app/wrapper.sh
 
 VOLUME ["/data"]
 
-CMD ["sh", "-c", "while true; do /app/monitor.sh; sleep 21600; done"]
+CMD ["sh", "-c", "while true; do /app/monitor.sh; sleep ${CHECK_INTERVAL:-21600}; done"]
