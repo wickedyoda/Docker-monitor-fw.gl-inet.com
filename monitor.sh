@@ -6,6 +6,21 @@ set -e
 
 DRY_RUN="${DRY_RUN:-false}"
 CRAWL_DEPTH="${CRAWL_DEPTH:-5}"
+LOG_RETENTION_DAYS="${LOG_RETENTION_DAYS:-30}"
+
+LOG_DIR="/data/logs"
+LOG_FILE="$LOG_DIR/monitor.log"
+
+mkdir -p "$LOG_DIR"
+
+log() {
+  local msg="$1"
+  local ts
+  ts="$(date '+%Y-%m-%d %H:%M:%S')"
+  echo "[$ts] $msg" | tee -a "$LOG_FILE"
+}
+
+log "Starting firmware check run"
 
 DISCORD_TITLE="${DISCORD_TITLE:-🚀 New GL.iNet Firmware Released}"
 DISCORD_PREFIX="${DISCORD_PREFIX:-New firmware detected:}"
@@ -18,15 +33,19 @@ mkdir -p "$TMP_DIR"
 
 touch "$STATE_FILE"
 
-# Recursive crawler
+# Clean old logs
+find "$LOG_DIR" -type f -name "*.log" -mtime +"$LOG_RETENTION_DAYS" -delete
+log "Old logs older than $LOG_RETENTION_DAYS days cleaned"
+
 crawl() {
   local url="$1"
   local depth="$2"
 
   [ "$depth" -le 0 ] && return
 
-  local file="$TMP_DIR/$(echo "$url" | sed 's#[/:]#_#g').html"
+  log "Crawling $url (depth $depth)"
 
+  local file="$TMP_DIR/$(echo "$url" | sed 's#[/:]#_#g').html"
   curl -s "$url" -o "$file" || return
 
   grep -oE 'href="[^"]+"' "$file" | sed 's/href="//;s/"//' | while read -r link; do
@@ -48,6 +67,8 @@ FIRMWARE_LIST="$TMP_DIR/firmware.txt"
 : > "$FIRMWARE_LIST"
 
 crawl "$WEBSITE" "$CRAWL_DEPTH" | sort -u > "$FIRMWARE_LIST"
+
+log "Firmware files discovered: $(wc -l < "$FIRMWARE_LIST")"
 
 declare -A STORED
 declare -A CURRENT
@@ -81,6 +102,7 @@ while read -r URL; do
     LAST_CHANNEL="${LAST##*:}"
 
     if [[ "$VERSION" != "$LAST_VERSION" || "$CHANNEL" != "$LAST_CHANNEL" ]]; then
+      log "Detected change for $MODEL: $LAST → $VERSION ($CHANNEL)"
       MESSAGE+="$DISCORD_EMOJI **$MODEL** → v$VERSION ($LABEL)\n"
       MESSAGE+="🔗 $URL\n\n"
       POST=true
@@ -92,10 +114,10 @@ if [ "$POST" = true ]; then
   [ -n "$DISCORD_SUFFIX" ] && MESSAGE+="\n$DISCORD_SUFFIX"
 
   if [ "$DRY_RUN" = true ]; then
-    echo "----- DRY RUN MODE -----"
+    log "DRY_RUN enabled – message not sent"
     echo "$MESSAGE"
-    echo "------------------------"
   else
+    log "Posting update to Discord"
     curl -s -X POST \
       -H "Content-Type: application/json" \
       -d "{\"content\":\"$MESSAGE\"}" \
@@ -106,4 +128,8 @@ if [ "$POST" = true ]; then
   for MODEL in "${!CURRENT[@]}"; do
     echo "$MODEL=${CURRENT[$MODEL]}" >> "$STATE_FILE"
   done
+else
+  log "No firmware changes detected"
 fi
+
+log "Firmware check run completed"
