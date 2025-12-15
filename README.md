@@ -4,7 +4,7 @@ A Docker-based monitoring service that tracks new GL.iNet firmware releases and 
 
 This project is designed to be quiet, configurable, and safe for long-running production use.
 
----
+----
 
 ## Features
 
