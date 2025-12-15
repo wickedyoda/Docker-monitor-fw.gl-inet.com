@@ -37,8 +37,8 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/wickedyoda/Docker-monitor-fw.gl-inet.com:latest
-            ghcr.io/wickedyoda/Docker-monitor-fw.gl-inet.com:${{ steps.date.outputs.date }}
+            ghcr.io/wickedyoda/docker-monitor-fw.gl-inet.com:latest
+            ghcr.io/wickedyoda/docker-monitor-fw.gl-inet.com:${{ steps.date.outputs.date }}
 
       - name: Remove GHCR images older than 90 days
         uses: actions/github-script@v7
