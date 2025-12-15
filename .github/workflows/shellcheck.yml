@@ -1,4 +1,6 @@
 name: Shell Script Lint & Security Check
+permissions:
+  contents: read
 
 on:
   pull_request:
