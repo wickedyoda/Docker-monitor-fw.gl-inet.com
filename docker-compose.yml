@@ -1,6 +1,6 @@
 services:
   glinet-fw-monitor:
-    build: .
+    image: ghcr.io/wickedyoda/docker-monitor-fw.gl-inet.com:latest
     container_name: glinet-fw-monitor
     env_file:
       - .env
