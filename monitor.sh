@@ -1,72 +1,113 @@
 #!/bin/bash
-set -e
+set -euo pipefail
+IFS=$'\n\t'
 
+#######################################
+# Required environment
+#######################################
 : "${DISCORD_WEBHOOK:?DISCORD_WEBHOOK is not set}"
 : "${WEBSITE:?WEBSITE is not set}"
 
+#######################################
+# Configuration
+#######################################
 DRY_RUN="${DRY_RUN:-false}"
 CRAWL_DEPTH="${CRAWL_DEPTH:-5}"
 LOG_RETENTION_DAYS="${LOG_RETENTION_DAYS:-30}"
 
+BASE_DOMAIN="fw.gl-inet.com"
+
 LOG_DIR="/data/logs"
 LOG_FILE="$LOG_DIR/monitor.log"
+STATE_FILE="/data/versions.txt"
 
-mkdir -p "$LOG_DIR"
+TMP_DIR="/tmp/crawl"
+VISITED_FILE="$TMP_DIR/visited.txt"
 
+mkdir -p "$LOG_DIR" "$TMP_DIR"
+touch "$STATE_FILE" "$VISITED_FILE"
+
+#######################################
+# Logging
+#######################################
 log() {
-  local msg="$1"
   local ts
   ts="$(date '+%Y-%m-%d %H:%M:%S')"
-  echo "[$ts] $msg" | tee -a "$LOG_FILE"
+  echo "[$ts] $*" | tee -a "$LOG_FILE"
 }
 
 log "Starting firmware check run"
 
-DISCORD_TITLE="${DISCORD_TITLE:-🚀 New GL.iNet Firmware Released}"
-DISCORD_PREFIX="${DISCORD_PREFIX:-New firmware detected:}"
-DISCORD_SUFFIX="${DISCORD_SUFFIX:-}"
-DISCORD_EMOJI="${DISCORD_EMOJI:-📦}"
-
-STATE_FILE="/data/versions.txt"
-TMP_DIR="/tmp/crawl"
-mkdir -p "$TMP_DIR"
-
-touch "$STATE_FILE"
-
-# Clean old logs
-find "$LOG_DIR" -type f -name "*.log" -mtime +"$LOG_RETENTION_DAYS" -delete
+#######################################
+# Log retention
+#######################################
+find "$LOG_DIR" -type f -name "*.log" -mtime +"$LOG_RETENTION_DAYS" -delete || true
 log "Old logs older than $LOG_RETENTION_DAYS days cleaned"
 
+#######################################
+# Helpers
+#######################################
+already_visited() {
+  grep -Fxq "$1" "$VISITED_FILE"
+}
+
+mark_visited() {
+  echo "$1" >> "$VISITED_FILE"
+}
+
+safe_filename() {
+  echo "${1//[\/:]/_}"
+}
+
+json_escape() {
+  jq -Rs . <<<"$1"
+}
+
+#######################################
+# Recursive crawler
+#######################################
 crawl() {
   local url="$1"
   local depth="$2"
 
-  [ "$depth" -le 0 ] && return
+  [[ "$depth" -le 0 ]] && return
+  already_visited "$url" && return
+  mark_visited "$url"
 
   log "Crawling $url (depth $depth)"
 
-  local safe_url
-  safe_url="${url//[\/:]/_}"
+  local safe file
+  safe="$(safe_filename "$url")"
+  file="$TMP_DIR/${safe}.html"
 
-  local file
-  file="$TMP_DIR/${safe_url}.html"
+  if ! curl -fsSL "$url" -o "$file"; then
+    log "WARN: Failed to fetch $url"
+    return
+  fi
 
-  curl -fsS "$url" -o "$file" || return
-
-  # Extract links without subshell recursion
   mapfile -t links < <(
-    grep -oE 'href="[^"]+"' "$file" |
-    sed 's/href="//;s/"//'
+    grep -oiE 'href="[^"]+"' "$file" |
+    sed -E 's/^href="//;s/"$//' |
+    sort -u
   )
 
   for link in "${links[@]}"; do
     local next
 
-    if [[ "$link" =~ ^https?:// ]]; then
-      next="$link"
-    else
-      next="${url%/}/$link"
-    fi
+    case "$link" in
+      http://*|https://*)
+        next="$link"
+        ;;
+      /*)
+        next="https://${BASE_DOMAIN}${link}"
+        ;;
+      *)
+        next="${url%/}/$link"
+        ;;
+    esac
+
+    # Enforce domain pinning
+    [[ "$next" != *"$BASE_DOMAIN"* ]] && continue
 
     if [[ "$next" =~ \.(bin|img|tar)$ ]]; then
       echo "$next"
@@ -76,24 +117,38 @@ crawl() {
   done
 }
 
+#######################################
+# Crawl execution
+#######################################
 FIRMWARE_LIST="$TMP_DIR/firmware.txt"
 : > "$FIRMWARE_LIST"
+: > "$VISITED_FILE"
 
 crawl "$WEBSITE" "$CRAWL_DEPTH" | sort -u > "$FIRMWARE_LIST"
 
 log "Firmware files discovered: $(wc -l < "$FIRMWARE_LIST")"
 
-declare -A STORED
-declare -A CURRENT
+#######################################
+# Load previous state
+#######################################
+declare -A STORED CURRENT
 
-while IFS="=" read -r model data; do
-  STORED["$model"]="$data"
+while IFS="=" read -r model data || [[ -n "$model" ]]; do
+  [[ -n "$model" ]] && STORED["$model"]="$data"
 done < "$STATE_FILE"
+
+#######################################
+# Detection logic
+#######################################
+DISCORD_TITLE="${DISCORD_TITLE:-🚀 New GL.iNet Firmware Released}"
+DISCORD_PREFIX="${DISCORD_PREFIX:-New firmware detected:}"
+DISCORD_SUFFIX="${DISCORD_SUFFIX:-}"
+DISCORD_EMOJI="${DISCORD_EMOJI:-📦}"
 
 MESSAGE="**$DISCORD_TITLE**\n$DISCORD_PREFIX\n\n"
 POST=false
 
-while read -r URL; do
+while read -r URL || [[ -n "$URL" ]]; do
   FILE="${URL##*/}"
 
   if [[ "$FILE" =~ openwrt-([a-zA-Z0-9]+)-([0-9]+\.[0-9]+\.[0-9]+) ]]; then
@@ -110,7 +165,7 @@ while read -r URL; do
 
     CURRENT["$MODEL"]="$VERSION:$CHANNEL"
 
-    LAST="${STORED[$MODEL]}"
+    LAST="${STORED[$MODEL]:-}"
     LAST_VERSION="${LAST%%:*}"
     LAST_CHANNEL="${LAST##*:}"
 
@@ -123,21 +178,25 @@ while read -r URL; do
   fi
 done < "$FIRMWARE_LIST"
 
-if [ "$POST" = true ]; then
-  [ -n "$DISCORD_SUFFIX" ] && MESSAGE+="\n$DISCORD_SUFFIX"
+#######################################
+# Notify & persist
+#######################################
+if [[ "$POST" == true ]]; then
+  [[ -n "$DISCORD_SUFFIX" ]] && MESSAGE+="\n$DISCORD_SUFFIX"
 
-  if [ "$DRY_RUN" = true ]; then
+  if [[ "$DRY_RUN" == true ]]; then
     log "DRY_RUN enabled – message not sent"
-    echo "$MESSAGE"
+    echo -e "$MESSAGE"
   else
     log "Posting update to Discord"
-    curl -s -X POST \
+    payload=$(json_escape "$MESSAGE")
+    curl -fsS -X POST \
       -H "Content-Type: application/json" \
-      -d "{\"content\":\"$MESSAGE\"}" \
+      -d "{\"content\":$payload}" \
       "$DISCORD_WEBHOOK"
   fi
 
-: > "$STATE_FILE"
+  : > "$STATE_FILE"
   for MODEL in "${!CURRENT[@]}"; do
     echo "$MODEL=${CURRENT[$MODEL]}" >> "$STATE_FILE"
   done
