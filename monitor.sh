@@ -45,14 +45,27 @@ crawl() {
 
   log "Crawling $url (depth $depth)"
 
-  local file="$TMP_DIR/$(echo "$url" | sed 's#[/:]#_#g').html"
-  curl -s "$url" -o "$file" || return
+  local safe_url
+  safe_url="${url//[\/:]/_}"
 
-  grep -oE 'href="[^"]+"' "$file" | sed 's/href="//;s/"//' | while read -r link; do
+  local file
+  file="$TMP_DIR/${safe_url}.html"
+
+  curl -fsS "$url" -o "$file" || return
+
+  # Extract links without subshell recursion
+  mapfile -t links < <(
+    grep -oE 'href="[^"]+"' "$file" |
+    sed 's/href="//;s/"//'
+  )
+
+  for link in "${links[@]}"; do
+    local next
+
     if [[ "$link" =~ ^https?:// ]]; then
       next="$link"
     else
-      next="$url/$link"
+      next="${url%/}/$link"
     fi
 
     if [[ "$next" =~ \.(bin|img|tar)$ ]]; then
