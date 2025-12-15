@@ -1,42 +1,40 @@
-# GL.iNet Firmware Monitor
+# GL.iNet Firmware Monitor (Docker)
 
-A Docker-based monitoring service that tracks new GL.iNet firmware releases and posts notifications to Discord via webhook.
+A Docker-based service that monitors the GL.iNet firmware repository for new firmware releases and posts notifications to Discord via webhook.
 
-This project is designed to be quiet, configurable, and safe for long-running production use.
+This project is designed to be quiet, configurable, and safe for continuous operation, with automated container publishing and retention management.
 
-----
+---
 
 ## Features
 
-- Recursive crawling of firmware directories (configurable depth)
-- Version-aware deduplication (no reposts on reuploads or mirrors)
-- Stable vs Beta detection based on filename
+- Recursive crawling of firmware directories with configurable depth
+- Monitors firmware files (.bin, .img, .tar)
+- Prevents duplicate notifications unless version or channel changes
+- Detects stable vs beta firmware based on filename
 - Discord notifications via webhook
 - Dry-run mode for safe testing
-- Fully configurable via `.env` file
-- Docker-native logging (`docker logs`)
-- Persistent log files with automatic retention
-- No cron jobs required
+- Persistent state tracking
+- Full logging to container logs and rotating log files
+- Automated Docker image publishing to GitHub Container Registry
+- Automatic pruning of old container images (90-day retention)
 
 ---
 
 ## How It Works
 
-1. Crawls the configured firmware site recursively up to a defined depth
-2. Discovers firmware files (`.bin`, `.img`, `.tar`)
-3. Extracts model, version, and release channel (stable or beta)
-4. Compares against previously recorded versions
-5. Posts to Discord only if:
-   - The version changes, or
-   - The release channel changes (beta ↔ stable)
-6. Logs all actions to container logs and a rotating log file
+1. Crawls the configured firmware URL recursively up to the configured depth
+2. Discovers firmware files and extracts model, version, and channel
+3. Compares results against the last recorded state
+4. Posts to Discord only when a change is detected
+5. Logs all actions for auditing and troubleshooting
 
 ---
 
 ## Directory Structure
 
 ```
-glinet-fw-monitor/
+.
 ├── Dockerfile
 ├── docker-compose.yml
 ├── monitor.sh
@@ -58,104 +56,91 @@ glinet-fw-monitor/
 
 ---
 
-## Setup
-
-### 1. Create environment file
-
-```
-cp .env.example .env
-```
-
-Edit `.env` and configure values.
-
----
-
 ## Environment Variables
 
 | Variable | Description | Default |
-|--------|-------------|---------|
-| WEBSITE | Base firmware URL to crawl | https://fw.gl-inet.com |
+|--------|------------|---------|
+| WEBSITE | Base firmware URL | https://fw.gl-inet.com/firmware/ |
 | DISCORD_WEBHOOK | Discord webhook URL | required |
 | DRY_RUN | Disable Discord posting | true |
-| CHECK_INTERVAL | Check interval (seconds) | 21600 (6 hours) |
+| CHECK_INTERVAL | Check interval (seconds) | 10800 (3 hours) |
 | CRAWL_DEPTH | Recursive crawl depth | 5 |
 | LOG_RETENTION_DAYS | Log retention period | 30 |
-| DISCORD_TITLE | Message title | GL.iNet Firmware Monitor |
-| DISCORD_PREFIX | Text before firmware list | Firmware change detected: |
-| DISCORD_SUFFIX | Text after firmware list | empty |
-| DISCORD_EMOJI | Emoji per entry | 📦 |
+| DISCORD_TITLE | Discord message title | GL.iNet Firmware Monitor |
+| DISCORD_PREFIX | Message prefix | Firmware change detected |
+| DISCORD_SUFFIX | Message suffix | empty |
+| DISCORD_EMOJI | Entry emoji | 📦 |
 
 ---
 
-## Running with Docker
+## Running with Docker Compose
 
 ```
-docker compose up -d --build
+docker compose up -d
 ```
 
 ---
 
 ## Logs
 
-### Container logs
+### Container Logs
 ```
 docker logs glinet-fw-monitor
 ```
 
-### Persistent logs
+### Persistent Logs
 ```
 ./data/logs/monitor.log
 ```
 
-Logs older than the configured retention period are automatically deleted.
+Logs older than the configured retention period are automatically removed.
 
 ---
 
 ## Testing Mode
 
-By default, `DRY_RUN=true`.
+By default, the monitor runs in dry-run mode.
 
-In this mode:
-- No Discord messages are sent
-- Output is logged for verification
+DRY_RUN=true
 
-To force a test notification:
-```
-rm -f data/versions.txt
-docker compose restart
-```
+This allows you to verify crawling, detection, and message formatting without sending Discord notifications.
 
 ---
 
 ## Going Live
 
-Set the following in `.env`:
-```
+Set the following in .env:
+
 DRY_RUN=false
-```
 
 Restart the container:
-```
+
 docker compose restart
-```
 
 ---
 
-## Stable vs Beta Detection
+## Docker Image
 
-- Filenames containing `beta` (case-insensitive) are classified as BETA
-- All others are treated as STABLE
-- Channel changes trigger notifications even if the version does not change
+Images are automatically built and published on every push to the main branch.
+
+Tags published:
+- latest
+- Date-based tag (YYYYMMDD)
+
+Example:
+ghcr.io/wickedyoda/docker-monitor-fw.gl-inet.com:latest
+ghcr.io/wickedyoda/docker-monitor-fw.gl-inet.com:20251215
+
+Old images older than 90 days are automatically pruned.
 
 ---
 
-## Deduplication Logic
+## Security Notes
 
-Notifications are sent only when:
-- The firmware version changes, or
-- The release channel changes
-
-Reuploads and mirror refreshes do not trigger reposts.
+- Do not commit your .env file
+- Rotate Discord webhooks if exposed
+- Access to firmware data is read-only
+- No reverse engineering or firmware modification is performed
 
 ---
 
@@ -163,15 +148,13 @@ Reuploads and mirror refreshes do not trigger reposts.
 
 All data, scripts, and related materials are Copyright © WickedYoda.
 
-Use of this project is subject to WickedYoda’s copyright, privacy, and usage terms.
+Use of this project is subject to WickedYoda’s copyright and privacy terms.
 
-The official Copyright and Privacy Notice can be found here:
+Copyright and Privacy Notice:
 https://wickedyoda.com/?page_id=3
-
-Unauthorized redistribution, reuse, or modification outside the scope of the published terms is not permitted.
 
 ---
 
 ## License
 
-Refer to WickedYoda’s copyright and privacy notice for licensing and usage terms.
+Refer to the WickedYoda Copyright and Privacy Notice for licensing and usage terms.
