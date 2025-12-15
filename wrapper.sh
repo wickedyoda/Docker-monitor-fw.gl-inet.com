@@ -1,7 +1,8 @@
 #!/bin/bash
 
 set -a
-[ -f .env ] && source .env
+# shellcheck source=/dev/null
+[ -f .env ] && . .env
 set +a
 
 echo "===================================="

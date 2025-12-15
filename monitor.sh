@@ -124,7 +124,7 @@ if [ "$POST" = true ]; then
       "$DISCORD_WEBHOOK"
   fi
 
-  > "$STATE_FILE"
+: > "$STATE_FILE"
   for MODEL in "${!CURRENT[@]}"; do
     echo "$MODEL=${CURRENT[$MODEL]}" >> "$STATE_FILE"
   done
